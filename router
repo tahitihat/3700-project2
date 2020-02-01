@@ -5,6 +5,7 @@ import argparse
 import json
 import select
 import socket
+import ipaddress
 
 ##########################################################################################
 
@@ -40,9 +41,10 @@ PROV = "prov"
 
 class Router:
   """ Your Router """
-  def __init__(self, networks):
+  def __init__(self, asn, networks):
+    self.asn = asn
     self.routes = {}
-    self.updates = {}
+    self.updates = []
     self.relations = {}
     self.sockets = {}
     for relationship in networks:
@@ -120,7 +122,30 @@ class Router:
 
   def update(self, srcif, packet):
     """ handle update packets """
-    # TODO 
+    # Save copy of the route announcement
+    self.updates.append(packet)
+
+    # Update forwarding table
+    src = packet[SRCE]
+    dst = packet[DEST]
+    localpref = packet[MESG][LPRF]
+    aspath = packet[MESG][APTH]
+    origin = packet[MESG][ORIG]
+    self_origin = packet[MESG][SORG]
+
+    network = packet[MESG][NTWK]
+    netmask = packet[MESG][NMSK]
+    self.routes[(network, netmask)] = src
+
+    # Send announcement to all neighboring routers
+    aspath.append(self.asn)
+    packet[MESG][APTH] = aspath
+    packet[SRCE] = dst
+
+    for sock, conn in self.sockets.items():
+      packet[DEST] = sock 
+      conn.sendall(json.dumps(packet).encode())
+
     return False
 
   def revoke(self, packet):
@@ -135,7 +160,13 @@ class Router:
 
   def handle_packet(self, srcif, packet):
     """ dispatches a packet """
-    # TODO
+    if packet[TYPE] == UPDT:
+      self.update(srcif, packet)
+    elif packet[TYPE] == DATA:
+      self.forward(srcif, packet)
+    elif packet[TYPE] == DUMP:
+      self.dump(packet)
+
     return False
 
   def send_error(self, conn, msg):
@@ -165,6 +196,7 @@ class Router:
 
 if __name__ == "__main__":
   PARSER = argparse.ArgumentParser(description='route packets')
+  PARSER.add_argument('asn', type=int, help="AS number")
   PARSER.add_argument('networks', metavar='networks', type=str, nargs='+', help="networks")
   ARGS = PARSER.parse_args()
-  Router(ARGS.networks).run()
+  Router(ARGS.asn, ARGS.networks).run()
