@@ -140,12 +140,12 @@ class Router:
     # Send announcement to all neighboring routers
     aspath.append(self.asn)
     packet[MESG][APTH] = aspath
-    packet[SRCE] = dst
 
     for sock, conn in self.sockets.items():
-      if not sock == src:
-        packet[DEST] = sock 
-        conn.sendall(json.dumps(packet).encode())
+        if not src == sock:
+          packet[DEST] = sock
+          packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
+          conn.sendall(json.dumps(packet).encode())
 
   def revoke(self, packet):
     """ handle revoke packets """
