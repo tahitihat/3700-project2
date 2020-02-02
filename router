@@ -112,8 +112,21 @@ class Router:
 
   def forward(self, srcif, packet):
     """ Forward a data packet """
-    # TODO
+    src = packet[SRCE]
+    dst = packet[DEST]
+    # Find the socket that matches the destination
+    for net, hop in self.routes.items():
+      network = net[0]
+      netmask = net[1]
+      dest_network = ipaddress.ip_network(dst + '/' + netmask, strict=False)
+      route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
+      if route_network.compare_networks(dest_network) == 0:
+        # Send the packet on the correct socket
+        conn = self.sockets[hop]
+        conn.sendall(json.dumps(packet).encode())
+        return True
     return False
+
 
   def coalesce(self):
     """ coalesce any routes that are right next to each other """
@@ -147,6 +160,9 @@ class Router:
           packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
           conn.sendall(json.dumps(packet).encode())
 
+    return True
+
+
   def revoke(self, packet):
     """ handle revoke packets """
     # TODO
@@ -168,22 +184,27 @@ class Router:
     # Send the table packet to the router requesting it
     conn = self.sockets[src]
     conn.sendall(table_packet.encode())
+    
+    return True
 
   def handle_packet(self, srcif, packet):
     """ dispatches a packet """
     if packet[TYPE] == UPDT:
-      self.update(srcif, packet)
+      status = self.update(srcif, packet)
     elif packet[TYPE] == DATA:
-      self.forward(srcif, packet)
+      status = self.forward(srcif, packet)
     elif packet[TYPE] == DUMP:
-      self.dump(packet)
+      status = self.dump(packet)
 
-    return False
+    return status
 
   def send_error(self, conn, msg):
     """ Send a no_route error message """
-    # TODO
-    return
+    packet_src = msg[SRCE]
+    packet_dst = msg[DEST]
+    error_msg = {'src': packet_src, 'dst': packet_dst, 'type': 'no route', 'msg': {}}
+    error_msg_packet = json.dumps(error_msg)
+    conn.sendall(error_msg_packet.encode())
 
   def run(self):
     """ main loop for the router """
