@@ -143,8 +143,9 @@ class Router:
     packet[SRCE] = dst
 
     for sock, conn in self.sockets.items():
-      packet[DEST] = sock 
-      conn.sendall(json.dumps(packet).encode())
+      if not sock == src:
+        packet[DEST] = sock 
+        conn.sendall(json.dumps(packet).encode())
 
   def revoke(self, packet):
     """ handle revoke packets """
