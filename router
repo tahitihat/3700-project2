@@ -146,8 +146,6 @@ class Router:
       packet[DEST] = sock 
       conn.sendall(json.dumps(packet).encode())
 
-    return False
-
   def revoke(self, packet):
     """ handle revoke packets """
     # TODO
@@ -155,8 +153,20 @@ class Router:
 
   def dump(self, packet):
     """ handles dump table requests """
-    # TODO
-    return True
+    src = packet[SRCE]
+    dst = packet[DEST]
+    
+    # Build the table message based on contents of routing table
+    table_dict = []
+    for network, path in self.routes.items():
+      table_item = {"network": network[0], "netmask": network[1], "peer":path}
+      table_dict.append(table_item)
+    table_packet_dict = {SRCE: dst, DEST: src, TYPE: "table", MESG: table_dict}
+    table_packet = json.dumps(table_packet_dict)
+
+    # Send the table packet to the router requesting it
+    conn = self.sockets[src]
+    conn.sendall(table_packet.encode())
 
   def handle_packet(self, srcif, packet):
     """ dispatches a packet """
