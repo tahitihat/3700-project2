@@ -1,4 +1,5 @@
-# CS3700 Project 2 - Caitlin Wang and Isabel Trip (Team Blonco)
+# CS3700 Project 2 - Team Blonco
+Caitlin Wang and Isabel Tripp
 
 ## High-level Approach
 
