@@ -41,6 +41,10 @@ CUST = "cust"
 PEER = "peer"
 PROV = "prov"
 
+# route origin info
+ISP = 'ISP'
+ESP = 'ESP'
+UNK = 'UNK'
 
 ##########################################################################################
 
@@ -63,37 +67,93 @@ class Router:
 
 
   def lookup_routes(self, daddr):
-    """ Lookup all valid routes for an address """
-    # TODO
+    """ Look up all valid routes for an address """
     outroutes = []
+    for net, peer in self.routes.items():
+      network = net[0]
+      netmask = net[1]
+      route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
+      if ipaddress.ip_address(daddr) in route_network: 
+        outroutes.append(peer)
     return outroutes
 
 
   def get_shortest_as_path(self, routes):
     """ select the route with the shortest AS Path """
-    # TODO
     outroutes = []
+    shortest_len = 100000 #TODO better selection algorithm
+    for route in routes:
+      as_path = route.get(APTH)
+      as_path_len = len(as_path)
+      # If ASpath shorter, update outroutes and shortest_len
+      if as_path_len < shortest_len:
+        shortest_len = as_path_len
+        outroutes = [route]
+      # If ASpath equal, append route to outroutes
+      elif as_path_len == shortest_len:
+        outroutes.append(route)
+
     return outroutes
 
-
   def get_highest_preference(self, routes):
-    """ select the route with the shortest AS Path """
-    # TODO
+    """ select the route with the highest localPref """
     outroutes = []
+    highest_pref = 0
+    for route in routes:
+      localpref = route.get(LPRF)
+      # If localpref higher, update outroutes and highest_pref
+      if localpref > highest_pref:
+        highest_pref = localpref
+        outroutes = [route]
+      # If localpref equal, append route to outroutes
+      elif localpref == highest_pref:
+        outroutes.append(route)
+
     return outroutes
 
 
   def get_self_origin(self, routes):
     """ select self originating routes """
-    # TODO
-    outroutes = []
-    return outroutes
+    return [route for route in routes if route.get(SORG)]
+
+
+  def compare_higher_origin(origin1, origin2):
+    """
+      Compare two origins based on precedence IGP > EGP > UNK
+      <0 o1 is more preferable than o2
+      0 o1 is equivalent to o2
+      >1 o1 is less preferable than o2
+    """
+    if origin1 == IGP:
+      val = 0 if origin2 == IGP else -1
+    elif origin1 == EGP:
+      if origin2 == IGP:
+        val = 1
+      elif origin2 == EGP:
+        val = 0
+      elif origin2 == UNK:
+        val = -1
+    elif origin1 == UNK:
+      val = 0 if origin2 == UNK else 1
+
+    return val
 
 
   def get_origin_routes(self, routes):
-    """ select origin routes: EGP > IGP > UNK """
-    # TODO
+    """ select origin routes: IGP > EGP > UNK """
     outroutes = []
+    best_origin = UNK
+    for route in routes:
+      origin = route.get(ORIG)
+      origin_comparison = compare_higher_origin(origin, best_origin)
+      # If origin better, update outroutes and best_origin
+      if origin_comparison < 0:
+        best_origin = origin
+        outroutes = [route]
+      # If origin equal, append route to outroutes
+      elif origin_comparison == 0:
+        outroutes.append(route)
+
     return outroutes
 
 
@@ -105,7 +165,6 @@ class Router:
 
   def get_route(self, srcif, daddr):
     """ Select the best route for a given address """
-    # TODO
     peer = None
     routes = self.lookup_routes(daddr)
     # Rules go here
@@ -136,10 +195,12 @@ class Router:
       netmask = net[1]
       dst_network = ipaddress.ip_network(dst + '/' + netmask, strict=False)
       route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
+      # TODO refactor to call get_route
       if route_network.compare_networks(dst_network) == 0:
         # Send the packet on the correct socket
         try:
-          conn = self.sockets[peer]        
+          next_hop = peer.get('next_hop')
+          conn = self.sockets[next_hop]        
           conn.sendall(json.dumps(packet).encode())
         except:
           raise Exception('Failed to forward data packet')
@@ -162,11 +223,17 @@ class Router:
     # Update forwarding table
     src = packet[SRCE]
     dst = packet[DEST]
-    aspath = packet[MESG][APTH]
 
+    aspath = packet[MESG][APTH]
     network = packet[MESG][NTWK]
     netmask = packet[MESG][NMSK]
-    self.routes[(network, netmask)] = src
+    localpref = packet[MESG][LPRF]
+    origin = packet[MESG][ORIG]
+    self_origin = packet[MESG][SORG]
+
+    route_info = {'next_hop': src, APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
+
+    self.routes[(network, netmask)] = route_info
 
     # Send announcement to neighboring routers
     aspath.append(self.asn)
@@ -198,7 +265,7 @@ class Router:
     # Build the table message based on contents of routing table
     table_dict = []
     for net, peer in self.routes.items():
-      table_item = {NTWK: net[0], NMSK: net[1], PEER: peer}
+      table_item = {NTWK: net[0], NMSK: net[1], PEER: peer.get('next_hop')}
       table_dict.append(table_item)
 
     table_packet = {SRCE: dst, DEST: src, TYPE: 'table', MESG: table_dict}
