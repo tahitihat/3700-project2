@@ -183,8 +183,9 @@ class Router:
       # 4. EGP > IGP > UNK
       routes = self.get_origin_routes(routes)
       # 5. Lowest IP Address
-      # TODO
+      routes = [min(routes, key=lambda x: x.get(NXHP))]
       # Final check: enforce peering relationships
+      #TODO
       # routes = self.filter_relationships(srcif, routes)
     
     if len(routes) > 0: 
@@ -232,12 +233,6 @@ class Router:
 
     route_info = {NXHP: src, APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
 
-    #print(network)
-    #print(netmask)
-    #print(route_info)
-    #print('\n')
-
-    
     if (network, netmask) not in self.routes:
       self.routes[(network, netmask)] = [route_info]
     else:
