@@ -80,7 +80,7 @@ class Router:
       route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
       if ipaddress.ip_address(daddr) in route_network: 
         outroutes.append(routes)
-    return reduce(operator.concat, outroutes)
+    return reduce(operator.concat, outroutes) if len(outroutes) > 0 else []
 
   def get_shortest_as_path(self, routes):
     """ Select the route with the shortest AS Path """
@@ -255,9 +255,38 @@ class Router:
 
 
   def revoke(self, packet):
-    """ handle revoke packets """
-    # TODO
+    """ Handle revoke packets """
+    # Save copy of the revoke request
+    self.updates.append(packet)
+
+    src = packet[SRCE]
+    revoked_routes = packet[MESG]
+
+    for route in revoked_routes:
+      network = route.get('network')
+      netmask = route.get('netmask')
+      if (network, netmask) not in self.routes:
+        return False
+      else:
+        # Remove route option from self.routes 
+        route_options = self.routes[(network, netmask)]
+        self.routes[(network, netmask)] = list(filter(lambda x: not x.get(NXHP) == src, route_options))
+        # Remove (network, netmask) key from self.routes if now empty
+        if len(self.routes[(network, netmask)]) == 0:
+          del(self.routes[(network, netmask)])
+
+    # Send announcement to neighboring routers if network now inaccessible
+    for sock, conn in self.sockets.items():
+        if not src == sock:
+          packet[DEST] = sock
+          packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
+          try:
+            conn.sendall(json.dumps(packet).encode())
+          except:
+            raise Exception('Failed to forward update announcement to neighbor')
+
     return True
+
 
 
   def dump(self, packet):
@@ -294,7 +323,8 @@ class Router:
       status = self.forward(srcif, packet)
     elif packet[TYPE] == DUMP:
       status = self.dump(packet)
-
+    elif packet[TYPE] == RVKE:
+      status = self.revoke(packet)
     return status
 
 
@@ -302,6 +332,7 @@ class Router:
     """ Send a no_route error message """
     packet_src = msg[SRCE]
     packet_dst = msg[DEST]
+
     error_msg = {SRCE: packet_src, DEST: packet_dst, TYPE: 'no route', MESG: {}}
     try:    
       conn.sendall(json.dumps(error_msg).encode())
