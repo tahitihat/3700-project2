@@ -88,7 +88,7 @@ class Router:
     outroutes = []
     shortest_len = 100000 #TODO better selection algorithm
     for route in routes:
-      as_path = route.get(APTH)
+      as_path = route[APTH]
       as_path_len = len(as_path)
       # If ASpath shorter, update outroutes and shortest_len
       if as_path_len < shortest_len:
@@ -106,7 +106,7 @@ class Router:
     outroutes = []
     highest_pref = 0
     for route in routes:
-      localpref = route.get(LPRF)
+      localpref = route[LPRF]
       # If localpref higher, update outroutes and highest_pref
       if localpref > highest_pref:
         highest_pref = localpref
@@ -120,7 +120,7 @@ class Router:
 
   def get_self_origin(self, routes):
     """ Select self originating routes """
-    sorg_routes = [route for route in routes if route.get(SORG)]
+    sorg_routes = [route for route in routes if route[SORG]]
     return sorg_routes if len(sorg_routes) > 0 else routes
 
 
@@ -151,7 +151,7 @@ class Router:
     outroutes = []
     best_origin = UNK
     for route in routes:
-      origin = route.get(ORIG)
+      origin = route[ORIG]
       origin_comparison = self.compare_higher_origin(origin, best_origin)
       # If origin better, update outroutes and best_origin
       if origin_comparison < 0:
@@ -167,7 +167,8 @@ class Router:
   def filter_relationships(self, srcif, route):
     """ Don't allow Peer->Peer, Peer->Prov, or Prov->Peer forwards """
     src_relation = self.relations[srcif]
-    dst_relation = self.relations[route.get(NXHP)]
+    route_peer = route[NXHP]
+    dst_relation = self.relations[route_peer]
     if (not src_relation == CUST) and (not dst_relation == CUST):
       return None
     return route
@@ -188,11 +189,11 @@ class Router:
       # 4. EGP > IGP > UNK
       routes = self.get_origin_routes(routes)
       # 5. Lowest IP Address
-      routes = [min(routes, key=lambda x: x.get(NXHP))]
+      routes = [min(routes, key=lambda x: x[NXHP])]
       # Final check: enforce peering relationships
     if len(routes) > 0:
       route = self.filter_relationships(srcif, routes[0])
-      peer = route.get(NXHP) if route else None
+      peer = route[NXHP] if route else None
     return peer
 
 
@@ -206,6 +207,7 @@ class Router:
         conn = self.sockets[peer]
         conn.sendall(json.dumps(packet).encode())
       else: 
+        # No route to dest, send no route error
         self.send_forward_error(srcif, packet)
     except:
       raise Exception('Failed to forward data packet')
@@ -213,7 +215,7 @@ class Router:
 
 
   def send_forward_error(self, srcif, packet):
-    """ Send a no_route error message """
+    """ Build and send a no_route error message """
     packet_dst = packet[SRCE]
     packet_src = (ipaddress.ip_address(srcif) - 1).exploded
     error_msg = {SRCE: packet_src, DEST: packet_dst, TYPE: 'no route', MESG: {}}
@@ -259,8 +261,10 @@ class Router:
 
     src_relation = self.relations[srcif]
     for sock, conn in self.sockets.items():
-      sock_relation = self.relations[sock]
+      # Don't rebroadcast to source of update
       if not src == sock:
+        sock_relation = self.relations[sock]
+        # Don't allow Peer->Peer, Peer->Prov, or Prov->Peer updates
         if (src_relation == CUST) or (sock_relation == CUST):
           packet[DEST] = sock
           packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
@@ -281,14 +285,14 @@ class Router:
     revoked_routes = packet[MESG]
 
     for route in revoked_routes:
-      network = route.get('network')
-      netmask = route.get('netmask')
+      network = route[NTWK]
+      netmask = route[NMSK]
       if (network, netmask) not in self.routes:
         return False
       else:
         # Remove route option from self.routes 
         route_options = self.routes[(network, netmask)]
-        self.routes[(network, netmask)] = list(filter(lambda x: not x.get(NXHP) == src, route_options))
+        self.routes[(network, netmask)] = list(filter(lambda x: not x[NXHP] == src, route_options))
         # Remove (network, netmask) key from self.routes if now empty
         if len(self.routes[(network, netmask)]) == 0:
           del(self.routes[(network, netmask)])
@@ -306,7 +310,6 @@ class Router:
     return True
 
 
-
   def dump(self, packet):
     """ Handles dump table requests """
     src = packet[SRCE]
@@ -314,9 +317,9 @@ class Router:
     
     # Build the table message based on contents of routing table
     table_dict = []
-    for net, route_list in self.routes.items():
-      for route in route_list:
-        table_item = {NTWK: net[0], NMSK: net[1], PEER: route.get(NXHP)}
+    for net, routes in self.routes.items():
+      for route in routes:
+        table_item = {NTWK: net[0], NMSK: net[1], PEER: route[NXHP]}
         table_dict.append(table_item)
 
     table_packet = {SRCE: dst, DEST: src, TYPE: 'table', MESG: table_dict}
@@ -346,19 +349,11 @@ class Router:
     return status
 
 
-  def send_error(self, conn, msg):
-    """ Send a no_route error message """
-    """
-    packet_src = msg[SRCE]
-    packet_dst = msg[DEST]
+  def print_error(self, msg):
+    """ Print error message """
+    print('Packet handler failed to execute.\n')
+    print(msg)
 
-    error_msg = {SRCE: packet_src, DEST: packet_dst, TYPE: 'no route', MESG: {}}
-    try:    
-      conn.sendall(json.dumps(error_msg).encode())
-    except:
-      raise Exception('Failed to send error')
-    """
- 
 
   def run(self):
     """ Main loop for the router """
@@ -376,7 +371,7 @@ class Router:
               srcif = sock
           msg = json.loads(k)
           if not self.handle_packet(srcif, msg):
-            self.send_error(conn, msg)
+            self.print_error(msg)
         else:
           return
 
