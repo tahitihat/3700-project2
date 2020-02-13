@@ -190,27 +190,38 @@ class Router:
       # 5. Lowest IP Address
       routes = [min(routes, key=lambda x: x.get(NXHP))]
       # Final check: enforce peering relationships
-      if len(routes) > 0:
-        route = self.filter_relationships(srcif, routes[0])
-        peer = route.get(NXHP) if route else None
-    
-    return self.sockets[peer] if peer else None
+    if len(routes) > 0:
+      route = self.filter_relationships(srcif, routes[0])
+      peer = route.get(NXHP) if route else None
+    return peer
 
 
   def forward(self, srcif, packet):
     """ Forward a data packet """
     dst = packet[DEST]
-    
     # Find the socket that matches the destination
     try:
-      conn = self.get_route(srcif, dst)      
-      if conn is not None:
+      peer = self.get_route(srcif, dst)      
+      if peer is not None:
+        conn = self.sockets[peer]
         conn.sendall(json.dumps(packet).encode())
       else: 
-        return False
+        self.send_forward_error(srcif, packet)
     except:
       raise Exception('Failed to forward data packet')
     return True
+
+
+  def send_forward_error(self, srcif, packet):
+    """ Send a no_route error message """
+    packet_dst = packet[SRCE]
+    packet_src = (ipaddress.ip_address(srcif) - 1).exploded
+    error_msg = {SRCE: packet_src, DEST: packet_dst, TYPE: 'no route', MESG: {}}
+    try:
+      conn = self.sockets[srcif]
+      conn.sendall(json.dumps(error_msg).encode())
+    except:
+      raise Exception('Failed to send error')
 
 
   def coalesce(self):
@@ -246,8 +257,11 @@ class Router:
     aspath.append(self.asn)
     packet[MESG][APTH] = aspath
 
+    src_relation = self.relations[srcif]
     for sock, conn in self.sockets.items():
-        if not src == sock:
+      sock_relation = self.relations[sock]
+      if not src == sock:
+        if (src_relation == CUST) or (sock_relation == CUST):
           packet[DEST] = sock
           packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
           try:
@@ -334,6 +348,7 @@ class Router:
 
   def send_error(self, conn, msg):
     """ Send a no_route error message """
+    """
     packet_src = msg[SRCE]
     packet_dst = msg[DEST]
 
@@ -342,7 +357,8 @@ class Router:
       conn.sendall(json.dumps(error_msg).encode())
     except:
       raise Exception('Failed to send error')
-
+    """
+ 
 
   def run(self):
     """ Main loop for the router """
