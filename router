@@ -76,17 +76,21 @@ class Router:
     longest_prefix = 0
     longest_prefix_routes = []
 
-    for net, routes in self.routes.items():
+    for net, route in self.routes.items():
       network = net[0]
       netmask = net[1]
+      next_hop = net[2]
       route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
       if ipaddress.ip_address(daddr) in route_network:
         # Longest prefix matching
         bin_mask = bin(int(ipaddress.ip_address(netmask)))
         mask_prefix_length = bin_mask.count('1')
+        route[NXHP] = next_hop
         if mask_prefix_length > longest_prefix:
           longest_prefix = mask_prefix_length
-          longest_prefix_routes = routes
+          longest_prefix_routes = [route]
+        elif mask_prefix_length == longest_prefix:
+          longest_prefix_routes.append(route)
 
     return longest_prefix_routes
 
@@ -237,6 +241,7 @@ class Router:
   def coalesce(self):
     """ coalesce any routes that are right next to each other """
     # TODO (this is the most difficult task, save until last)
+
     return False
 
 
@@ -256,12 +261,9 @@ class Router:
     origin = packet[MESG][ORIG]
     self_origin = packet[MESG][SORG]
 
-    route_info = {NXHP: src, APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
+    route_info = {APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
 
-    if (network, netmask) not in self.routes:
-      self.routes[(network, netmask)] = [route_info]
-    else:
-      self.routes[(network, netmask)].append(route_info)
+    self.routes[(network, netmask, src)] = route_info
 
     # Send announcement to neighboring routers
     aspath.append(self.asn)
@@ -295,15 +297,11 @@ class Router:
     for route in revoked_routes:
       network = route[NTWK]
       netmask = route[NMSK]
-      if (network, netmask) not in self.routes:
+      if (network, netmask, src) not in self.routes:
         return False
       else:
-        # Remove route option from self.routes 
-        route_options = self.routes[(network, netmask)]
-        self.routes[(network, netmask)] = list(filter(lambda x: not x[NXHP] == src, route_options))
-        # Remove (network, netmask) key from self.routes if now empty
-        if len(self.routes[(network, netmask)]) == 0:
-          del(self.routes[(network, netmask)])
+        # Remove (network, netmask, src) key from self.routes
+        del(self.routes[(network, netmask, src)])
 
     # Send announcement to neighboring routers if network now inaccessible
     for sock, conn in self.sockets.items():
@@ -325,10 +323,9 @@ class Router:
     
     # Build the table message based on contents of routing table
     table_dict = []
-    for net, routes in self.routes.items():
-      for route in routes:
-        table_item = {NTWK: net[0], NMSK: net[1], PEER: route[NXHP]}
-        table_dict.append(table_item)
+    for net, route in self.routes.items():
+      table_item = {NTWK: net[0], NMSK: net[1], PEER: net[2]}
+      table_dict.append(table_item)
 
     table_packet = {SRCE: dst, DEST: src, TYPE: 'table', MESG: table_dict}
 
