@@ -72,15 +72,23 @@ class Router:
 
 
   def lookup_routes(self, daddr):
-    """ Look up all valid routes for an address """
-    outroutes = []
+    """ Look up all valid routes for an address """    
+    longest_prefix = 0
+    longest_prefix_routes = []
+
     for net, routes in self.routes.items():
       network = net[0]
       netmask = net[1]
       route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
-      if ipaddress.ip_address(daddr) in route_network: 
-        outroutes.append(routes)
-    return reduce(operator.concat, outroutes) if len(outroutes) > 0 else []
+      if ipaddress.ip_address(daddr) in route_network:
+        # Longest prefix matching
+        bin_mask = bin(int(ipaddress.ip_address(netmask)))
+        mask_prefix_length = bin_mask.count('1')
+        if mask_prefix_length > longest_prefix:
+          longest_prefix = mask_prefix_length
+          longest_prefix_routes = routes
+
+    return longest_prefix_routes
 
 
   def get_shortest_as_path(self, routes):
