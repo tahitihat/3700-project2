@@ -100,12 +100,12 @@ class Router:
   def get_shortest_as_path(self, routes):
     """ Select the route with the shortest AS Path """
     outroutes = []
-    shortest_len = 100000 #TODO better selection algorithm
+    shortest_len = None
     for route in routes:
       as_path = route[APTH]
       as_path_len = len(as_path)
       # If ASpath shorter, update outroutes and shortest_len
-      if as_path_len < shortest_len:
+      if shortest_len is None or as_path_len < shortest_len:
         shortest_len = as_path_len
         outroutes = [route]
       # If ASpath equal, append route to outroutes
