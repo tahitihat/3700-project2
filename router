@@ -240,17 +240,17 @@ class Router:
 
 
   def ip_to_bin(self, ip_str):
-  """ Calculate binary version of IP address """
+    """ Calculate binary version of IP address """
     return (bin(int(ipaddress.ip_address(ip_str))))
 
 
   def ip_to_int(self, ip_str):
-  """ Calculate int version of IP address """
+    """ Calculate int version of IP address """
     return (int(ipaddress.ip_address(ip_str)))
 
 
   def netmask_num_zeros(self, bin_netmask):
-  """ Return the number of 0's in binary netmask """
+    """ Return the number of 0's in binary netmask """
     return 32 - bin_netmask.count('1')
 
 
@@ -331,6 +331,22 @@ class Router:
     route_info = {APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
     self.coalesce((network, netmask, src), route_info)
 
+  def broadcast_to_neighbors(self, src, packet):
+    """ Send packet to all neighboring routers except source of packet """
+    src_relation = self.relations[src]
+    
+    for sock, conn in self.sockets.items():
+      if not src == sock:
+        sock_relation = self.relations[sock]
+        # Don't allow Peer->Peer, Peer->Prov, or Prov->Peer updates
+        if (src_relation == CUST) or (sock_relation == CUST):
+          packet[DEST] = sock
+          packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
+          try:
+            conn.sendall(json.dumps(packet).encode())
+          except:
+            raise Exception('Failed to forward announcement to neighbor')
+
 
   def update(self, srcif, packet):
     """ Handle update packets """
@@ -342,19 +358,7 @@ class Router:
     self.update_routing_table(packet)
     
     # Send announcement to neighboring routers
-    src = packet[SRCE]
-    src_relation = self.relations[srcif]
-    for sock, conn in self.sockets.items():
-      if not src == sock:
-        sock_relation = self.relations[sock]
-        # Don't allow Peer->Peer, Peer->Prov, or Prov->Peer updates
-        if (src_relation == CUST) or (sock_relation == CUST):
-          packet[DEST] = sock
-          packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
-          try:
-            conn.sendall(json.dumps(packet).encode())
-          except:
-            raise Exception('Failed to forward update announcement to neighbor')
+    self.broadcast_to_neighbors(srcif, packet)
 
     return True
 
@@ -384,15 +388,8 @@ class Router:
       self.update_routing_table(update_packet)
 
     # Send announcement to neighboring routers
-    for sock, conn in self.sockets.items():
-        if not revoke_src == sock:
-          packet[DEST] = sock
-          packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
-          try:
-            conn.sendall(json.dumps(packet).encode())
-          except:
-            raise Exception('Failed to forward update announcement to neighbor')
-
+    self.broadcast_to_neighbors(revoke_src, packet)
+    
     return True
 
 
