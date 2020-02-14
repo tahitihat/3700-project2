@@ -238,36 +238,29 @@ class Router:
       raise Exception('Failed to send error')
 
 
-  def coalesce(self):
+  def coalesce(self, new_net, new_route_info):
     """ coalesce any routes that are right next to each other """
-    aggregated_routes = {}
-    routes_to_aggregate = {}
-
+    self.routes[new_net] = new_route_info 
+    
     while True:
-      for net1, route_info1 in self.routes.items():
-        if net1 in routes_to_aggregate.keys():
+      for net, route_info in self.routes.items():
+        aggregate_route_net = None
+
+        if net == new_net:
           continue
-        for net2, route_info2 in self.routes.items():
-          if net1 == net2 or net2 in routes_to_aggregate.keys():
-            continue
-
-          if self.can_aggregate([net1, route_info1], [net2, route_info2]):
-            aggregate_route = self.get_aggregate_route((net1, route_info1))
-            aggregated_routes[aggregate_route[0]] = aggregate_route[1]
-
-            routes_to_aggregate[net1] = route_info1
-            routes_to_aggregate[net2] = route_info2
+        
+        if self.can_aggregate((net, route_info), (new_net, new_route_info)):
+          (aggregate_route_net, aggregate_route_info) = self.get_aggregate_route((net, route_info))
+          del(self.routes[net])
+          del(self.routes[new_net])
+          self.routes[aggregate_route_net] = aggregate_route_info
+          new_net = aggregate_route_net
+          new_route_info = aggregate_route_info
+          break
           
-      if len(aggregated_routes) == 0:
+      if not aggregate_route_net:
         break
 
-      for net, route in routes_to_aggregate.items():
-        del(self.routes[net])
-        routes_to_aggregate = {}
-
-      self.routes.update(aggregated_routes)
-      aggregated_routes = {}
-    
     return True
 
 
@@ -280,7 +273,7 @@ class Router:
 
     int_net1 = self.ip_to_int(network1) >> (self.netmask_num_zeros(bin_netmask1) + 1)
     int_net2 = self.ip_to_int(network2) >> (self.netmask_num_zeros(bin_netmask2) + 1)
-
+     
     return netmask1 == netmask2 and int_net1 == int_net2 and route1 == route2 and route_entry1[1] == route_entry2[1]
 
 
@@ -324,13 +317,12 @@ class Router:
     self_origin = packet[MESG][SORG]
 
     route_info = {APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
-
-    self.routes[(network, netmask, src)] = route_info
-    self.coalesce()
-
+    
     # Send announcement to neighboring routers
     aspath.append(self.asn)
     packet[MESG][APTH] = aspath
+
+    self.coalesce((network, netmask, src), route_info)
 
     src_relation = self.relations[srcif]
     for sock, conn in self.sockets.items():
