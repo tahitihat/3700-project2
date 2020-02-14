@@ -240,9 +240,71 @@ class Router:
 
   def coalesce(self):
     """ coalesce any routes that are right next to each other """
-    # TODO (this is the most difficult task, save until last)
+    aggregated_routes = {}
+    routes_to_aggregate = {}
 
-    return False
+    while True:
+      for net1, route_info1 in self.routes.items():
+        if net1 in routes_to_aggregate.keys():
+          continue
+        for net2, route_info2 in self.routes.items():
+          if net1 == net2 or net2 in routes_to_aggregate.keys():
+            continue
+
+          if self.can_aggregate([net1, route_info1], [net2, route_info2]):
+            aggregate_route = self.get_aggregate_route((net1, route_info1))
+            aggregated_routes[aggregate_route[0]] = aggregate_route[1]
+
+            routes_to_aggregate[net1] = route_info1
+            routes_to_aggregate[net2] = route_info2
+          
+      if len(aggregated_routes) == 0:
+        break
+
+      for net, route in routes_to_aggregate.items():
+        del(self.routes[net])
+        routes_to_aggregate = {}
+
+      self.routes.update(aggregated_routes)
+      aggregated_routes = {}
+    
+    return True
+
+
+  def can_aggregate(self, route_entry1, route_entry2):
+    (network1, netmask1, route1) = route_entry1[0]
+    (network2, netmask2, route2) = route_entry2[0]
+
+    bin_netmask1 = self.ip_to_bin(netmask1)
+    bin_netmask2 = self.ip_to_bin(netmask2)
+
+    int_net1 = self.ip_to_int(network1) >> (self.netmask_num_zeros(bin_netmask1) + 1)
+    int_net2 = self.ip_to_int(network2) >> (self.netmask_num_zeros(bin_netmask2) + 1)
+
+    return netmask1 == netmask2 and int_net1 == int_net2 and route1 == route2 and route_entry1[1] == route_entry2[1]
+
+
+  def get_aggregate_route(self, route_entry):
+    (network, netmask, route) = route_entry[0]
+    bin_netmask = self.ip_to_bin(netmask)
+    matched_network = self.ip_to_int(network) >> (self.netmask_num_zeros(bin_netmask)) + 1
+
+    new_network = ipaddress.ip_address(matched_network << self.netmask_num_zeros(bin_netmask) + 1).exploded
+    new_netmask = ipaddress.ip_address(int(bin_netmask, 2) - 2 ** (self.netmask_num_zeros(bin_netmask))).exploded
+
+    return ((new_network, new_netmask, route), route_entry[1])
+    
+
+  def ip_to_bin(self, ip_str):
+    return (bin(int(ipaddress.ip_address(ip_str))))
+
+
+  def ip_to_int(self, ip_str):
+    return (int(ipaddress.ip_address(ip_str)))
+
+
+  def netmask_num_zeros(self, bin_netmask):
+    return 32 - bin_netmask.count('1')
 
 
   def update(self, srcif, packet):
@@ -264,6 +326,7 @@ class Router:
     route_info = {APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
 
     self.routes[(network, netmask, src)] = route_info
+    self.coalesce()
 
     # Send announcement to neighboring routers
     aspath.append(self.asn)
