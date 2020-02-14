@@ -10,9 +10,7 @@ We started this project by looking at the milestone test cases and making sure w
 
 ### Remaining Project
 
-- Going in order of project assignment steps
-- Talking through implementation and writing pseudo-code before actually implementing new features
-- Refactoring as we go, making sure our code still works after each refactor
+For the remainder of Project 2 we followed the steps detailed in the assignment description and implemented revoke messages, peering relationships, longest prefix matching, and route aggregation, one by one. Our approach to implementing each of these new features was to talk out loud about our strategy and write out pseudo-code. After we outlined a plan, writing working code became straightforward. On more than one occasion, we had to refactor our code, either to support new features or to abstract functionality. After each refactor, we made sure our tests were still passing, so as to reduce the amount of debugging when working on larger changes.
 
 ## Challenges
 
@@ -24,9 +22,15 @@ We started this project by looking at the milestone test cases and making sure w
 
 ### Remaining Project
 
-1. Deciding on routing table data structure
-2. Unintentionally utating variables
-3. IP Address manipulation in aggregation implementation
+1. Up until we implemented route aggregation, each entry in our routing table had a `(network, netmask)` tuple key, where the value of each key was an array of all the ports that network could forward data to. However, when we started to implement route aggregation, we realized it would be difficult to coalesce two routes since every port we could forward to did not have a unique entry in our forwarding table. Therefore, we decided to modify our `self.routes` table to the following structure:
+
+    ```
+    # route is the IP address/port that can reach the network
+    self.routes = {(network, netmask, route): {'localpref': '', 'ASPath': '', 'origin': '', 'selfOrigin': ''}, ...}
+    ```
+    This was a challenging design choice, especially since we had already implemented all other features with our previous routing table structure. In the end, we decided it made sense to flatten our table as described above so that aggregating routes could be a simpler task. 
+
+2. While developing, we occasionally got tripped up by Python's pass-by-reference nature and were unknowingly mutating objects. This led us to store incorrect values and fail a few tests. We spent some time debugging those issues and were challenged to develop a deeper understanding about the language semantics. 
 
 ## Testing
 
