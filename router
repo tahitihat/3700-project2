@@ -76,14 +76,16 @@ class Router:
     longest_prefix = 0
     longest_prefix_routes = []
 
+    # Loop through all possible routes
     for net, route in self.routes.items():
       network = net[0]
       netmask = net[1]
       next_hop = net[2]
+      # Check if daddr is in network, netmask IP range
       route_network = ipaddress.ip_network(network + '/' + netmask, strict=False)
       if ipaddress.ip_address(daddr) in route_network:
         # Longest prefix matching
-        bin_mask = bin(int(ipaddress.ip_address(netmask)))
+        bin_mask = self.ip_to_bin(netmask)
         mask_prefix_length = bin_mask.count('1')
         route[NXHP] = next_hop
         if mask_prefix_length > longest_prefix:
@@ -129,7 +131,7 @@ class Router:
 
     return outroutes
 
-
+    
   def get_self_origin(self, routes):
     """ Select self originating routes """
     sorg_routes = [route for route in routes if route[SORG]]
@@ -190,7 +192,6 @@ class Router:
     """ Select the best route for a given address """
     routes = self.lookup_routes(daddr)
     peer = None
-    # Rules go here
     if routes:
       # 1. Highest Preference
       routes = self.get_highest_preference(routes)
@@ -202,28 +203,11 @@ class Router:
       routes = self.get_origin_routes(routes)
       # 5. Lowest IP Address
       routes = [min(routes, key=lambda x: x[NXHP])]
-      # Final check: enforce peering relationships
+    # Enforce peering relationships
     if len(routes) > 0:
       route = self.filter_relationships(srcif, routes[0])
       peer = route[NXHP] if route else None
     return peer
-
-
-  def forward(self, srcif, packet):
-    """ Forward a data packet """
-    dst = packet[DEST]
-    # Find the socket that matches the destination
-    try:
-      peer = self.get_route(srcif, dst)      
-      if peer is not None:
-        conn = self.sockets[peer]
-        conn.sendall(json.dumps(packet).encode())
-      else: 
-        # No route to dest, send no route error
-        self.send_forward_error(srcif, packet)
-    except:
-      raise Exception('Failed to forward data packet')
-    return True
 
 
   def send_forward_error(self, srcif, packet):
@@ -238,10 +222,79 @@ class Router:
       raise Exception('Failed to send error')
 
 
+  def forward(self, srcif, packet):
+    """ Forward a data packet """
+    dst = packet[DEST]
+    # Find the socket that matches the destination
+    try:
+      peer = self.get_route(srcif, dst)      
+      if peer is not None:
+        conn = self.sockets[peer]
+        conn.sendall(json.dumps(packet).encode())
+      else: 
+        # if no route to dest, send no route error
+        self.send_forward_error(srcif, packet)
+    except:
+      raise Exception('Failed to forward data packet')
+    return True
+
+
+  def ip_to_bin(self, ip_str):
+  """ Calculate binary version of IP address """
+    return (bin(int(ipaddress.ip_address(ip_str))))
+
+
+  def ip_to_int(self, ip_str):
+  """ Calculate int version of IP address """
+    return (int(ipaddress.ip_address(ip_str)))
+
+
+  def netmask_num_zeros(self, bin_netmask):
+  """ Return the number of 0's in binary netmask """
+    return 32 - bin_netmask.count('1')
+
+
+  def can_aggregate(self, route_entry1, route_entry2):
+    """ 
+      Check if two route entries can be aggregated. Must:
+      (1) be adjacent numerically
+      (2) forward to the same next-hop router
+      (3) have the same attributes
+    """
+    (network1, netmask1, route1) = route_entry1[0]
+    (network2, netmask2, route2) = route_entry2[0]
+
+    # Get binary representation of netmask
+    bin_netmask1 = self.ip_to_bin(netmask1)
+    bin_netmask2 = self.ip_to_bin(netmask2)
+
+    # Perform bit shift to check if masks are identical up to last bit
+    int_net1 = self.ip_to_int(network1) >> (self.netmask_num_zeros(bin_netmask1) + 1)
+    int_net2 = self.ip_to_int(network2) >> (self.netmask_num_zeros(bin_netmask2) + 1)
+     
+    # Check for (3) required conditions
+    return netmask1 == netmask2 and int_net1 == int_net2 and route1 == route2 and route_entry1[1] == route_entry2[1]
+
+
+  def get_aggregate_route(self, route_entry):
+    """ Find the (network, netmask, route): route_info item representing aggregated route """
+    (network, netmask, route) = route_entry[0]
+    # Get binary representation of netmask
+    bin_netmask = self.ip_to_bin(netmask)
+    matched_network = self.ip_to_int(network) >> (self.netmask_num_zeros(bin_netmask)) + 1
+
+    # Fill matched address and netmask with trailing 0s
+    new_network = ipaddress.ip_address(matched_network << self.netmask_num_zeros(bin_netmask) + 1).exploded
+    new_netmask = ipaddress.ip_address(int(bin_netmask, 2) - 2 ** (self.netmask_num_zeros(bin_netmask))).exploded
+
+    return ((new_network, new_netmask, route), route_entry[1])
+
+
   def coalesce(self, new_net, new_route_info):
-    """ coalesce any routes that are right next to each other """
+    """ Coalesce any routes that are right next to each other """
     self.routes[new_net] = new_route_info 
     
+    # Cascading aggregation until there are no more routes to aggregate
     while True:
       for net, route_info in self.routes.items():
         aggregate_route_net = None
@@ -250,6 +303,7 @@ class Router:
           continue
         
         if self.can_aggregate((net, route_info), (new_net, new_route_info)):
+          # Replace existing table entries with aggregated entry
           (aggregate_route_net, aggregate_route_info) = self.get_aggregate_route((net, route_info))
           del(self.routes[net])
           del(self.routes[new_net])
@@ -264,45 +318,9 @@ class Router:
     return True
 
 
-  def can_aggregate(self, route_entry1, route_entry2):
-    (network1, netmask1, route1) = route_entry1[0]
-    (network2, netmask2, route2) = route_entry2[0]
-
-    bin_netmask1 = self.ip_to_bin(netmask1)
-    bin_netmask2 = self.ip_to_bin(netmask2)
-
-    int_net1 = self.ip_to_int(network1) >> (self.netmask_num_zeros(bin_netmask1) + 1)
-    int_net2 = self.ip_to_int(network2) >> (self.netmask_num_zeros(bin_netmask2) + 1)
-     
-    return netmask1 == netmask2 and int_net1 == int_net2 and route1 == route2 and route_entry1[1] == route_entry2[1]
-
-
-  def get_aggregate_route(self, route_entry):
-    (network, netmask, route) = route_entry[0]
-    bin_netmask = self.ip_to_bin(netmask)
-    matched_network = self.ip_to_int(network) >> (self.netmask_num_zeros(bin_netmask)) + 1
-
-    new_network = ipaddress.ip_address(matched_network << self.netmask_num_zeros(bin_netmask) + 1).exploded
-    new_netmask = ipaddress.ip_address(int(bin_netmask, 2) - 2 ** (self.netmask_num_zeros(bin_netmask))).exploded
-
-    return ((new_network, new_netmask, route), route_entry[1])
-    
-
-  def ip_to_bin(self, ip_str):
-    return (bin(int(ipaddress.ip_address(ip_str))))
-
-
-  def ip_to_int(self, ip_str):
-    return (int(ipaddress.ip_address(ip_str)))
-
-
-  def netmask_num_zeros(self, bin_netmask):
-    return 32 - bin_netmask.count('1')
-
   def update_routing_table(self, packet):
-    # Update routing table with info from packet
+    """ Update routing table with info from packet """
     src = packet[SRCE]
-
     network = packet[MESG][NTWK]
     netmask = packet[MESG][NMSK]
     aspath = packet[MESG][APTH]
@@ -327,7 +345,6 @@ class Router:
     src = packet[SRCE]
     src_relation = self.relations[srcif]
     for sock, conn in self.sockets.items():
-      # Don't rebroadcast to source of update
       if not src == sock:
         sock_relation = self.relations[sock]
         # Don't allow Peer->Peer, Peer->Prov, or Prov->Peer updates
@@ -347,11 +364,10 @@ class Router:
     # Save copy of the revoke request
     self.revokes.append(packet)
 
+    # Remove now-revoked updates from update list
     revoke_src = packet[SRCE]
     revoked_routes = packet[MESG]
-
     filtered_updates = []
-    # Remove updates from update list that have been revoked
     for update_packet in self.updates:
       src = update_packet[SRCE]
       network = update_packet[MESG][NTWK]
@@ -367,7 +383,7 @@ class Router:
     for update_packet in self.updates:
       self.update_routing_table(update_packet)
 
-    # Send announcement to neighboring routers if network now inaccessible
+    # Send announcement to neighboring routers
     for sock, conn in self.sockets.items():
         if not revoke_src == sock:
           packet[DEST] = sock
