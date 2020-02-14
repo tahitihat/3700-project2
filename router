@@ -11,8 +11,7 @@ import json
 import select
 import socket
 import ipaddress
-import operator
-from functools import reduce
+import copy
 
 ##########################################################################################
 
@@ -60,6 +59,7 @@ class Router:
     self.asn = asn
     self.routes = {}
     self.updates = []
+    self.revokes = []
     self.relations = {}
     self.sockets = {}
     for relationship in networks:
@@ -299,31 +299,32 @@ class Router:
   def netmask_num_zeros(self, bin_netmask):
     return 32 - bin_netmask.count('1')
 
-
-  def update(self, srcif, packet):
-    """ Handle update packets """
-    # Save copy of the route announcement
-    self.updates.append(packet)
-
-    # Update forwarding table
+  def update_routing_table(self, packet):
+    # Update routing table with info from packet
     src = packet[SRCE]
-    dst = packet[DEST]
 
-    aspath = packet[MESG][APTH]
     network = packet[MESG][NTWK]
     netmask = packet[MESG][NMSK]
+    aspath = packet[MESG][APTH]
     localpref = packet[MESG][LPRF]
     origin = packet[MESG][ORIG]
     self_origin = packet[MESG][SORG]
 
     route_info = {APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
-    
-    # Send announcement to neighboring routers
-    aspath.append(self.asn)
-    packet[MESG][APTH] = aspath
-
     self.coalesce((network, netmask, src), route_info)
 
+
+  def update(self, srcif, packet):
+    """ Handle update packets """
+    # Save copy of the route announcement
+    new_packet = copy.deepcopy(packet)
+    self.updates.append(new_packet)
+   
+    packet[MESG][APTH].append(self.asn)
+    self.update_routing_table(packet)
+    
+    # Send announcement to neighboring routers
+    src = packet[SRCE]
     src_relation = self.relations[srcif]
     for sock, conn in self.sockets.items():
       # Don't rebroadcast to source of update
@@ -344,23 +345,31 @@ class Router:
   def revoke(self, packet):
     """ Handle revoke packets """
     # Save copy of the revoke request
-    self.updates.append(packet)
+    self.revokes.append(packet)
 
-    src = packet[SRCE]
+    revoke_src = packet[SRCE]
     revoked_routes = packet[MESG]
 
-    for route in revoked_routes:
-      network = route[NTWK]
-      netmask = route[NMSK]
-      if (network, netmask, src) not in self.routes:
-        return False
-      else:
-        # Remove (network, netmask, src) key from self.routes
-        del(self.routes[(network, netmask, src)])
+    filtered_updates = []
+    # Remove updates from update list that have been revoked
+    for update_packet in self.updates:
+      src = update_packet[SRCE]
+      network = update_packet[MESG][NTWK]
+      netmask = update_packet[MESG][NMSK]
+  
+      update_route = {NTWK: network, NMSK: netmask}
+      if not (src == revoke_src and update_route in revoked_routes):
+        filtered_updates.append(update_packet)
+    self.updates = filtered_updates
+      
+    # Rebuild routing table without revoked updates
+    self.routes = {}
+    for update_packet in self.updates:
+      self.update_routing_table(update_packet)
 
     # Send announcement to neighboring routers if network now inaccessible
     for sock, conn in self.sockets.items():
-        if not src == sock:
+        if not revoke_src == sock:
           packet[DEST] = sock
           packet[SRCE] = (ipaddress.ip_address(sock) - 1).exploded
           try:
