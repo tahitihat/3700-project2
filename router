@@ -331,6 +331,7 @@ class Router:
     route_info = {APTH: aspath, LPRF: localpref, ORIG: origin, SORG: self_origin}
     self.coalesce((network, netmask, src), route_info)
 
+
   def broadcast_to_neighbors(self, src, packet):
     """ Send packet to all neighboring routers except source of packet """
     src_relation = self.relations[src]
